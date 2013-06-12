@@ -2,753 +2,830 @@ package require starkit
 starkit::startup
 
 package require snit
+package require tablelist
+package require bitview
 
-# Add a bunch of casters for fixed bit widths.
-foreach p {8 16 32 64 128} {
-	# Fit number into X bits and return as an unsigned number
-	proc tcl::mathfunc::uint$p {n} [string map [list MODBASE [expr 2**$p]] {
-		return [expr entier($n) % MODBASE]
-	}]
-	# Fit number into X bits and return as an signed number (2s complement)
-	proc tcl::mathfunc::sint$p {n} [string map [list MODBASE [expr 2**$p]] {
-		if {$n >= 0 && $n < MODBASE/2} {return $n}
-		return [expr (entier($n) % MODBASE) - MODBASE]
-	}]
-}
+#console show
 
-proc tcl::mathfunc::float2ieee {f} {
-	return 0x[::convert::float2IEEE $f]
-}
-proc tcl::mathfunc::ieee2float {f} {
-	return [::convert::IEEE2float [expr {entier($f)}]]
-}
+namespace eval TCFive {
+	variable stack {}
+	variable mode uint32
+	variable defs {}
 
-namespace eval convert {
-
-	proc IEEE2float {data {byteorder 0}} {
-		# From http://wiki.tcl.tk/756
-		# reballance as 8 hex nibbles.
-		set data [format "%08X" $data]
-		if {$byteorder == 0} {
-			lassign [regsub -all {(..)} $data "0x\\1 "] se1 e2f1 f2 f3
-		} else {
-			lassign [regsub -all {(..)} $data "0x\\1 "] f3 f2 e2f1 se1
-		}
-
-		set se1  [expr {($se1 + 0x100) % 0x100}]
-		set e2f1 [expr {($e2f1 + 0x100) % 0x100}]
-		set f2   [expr {($f2 + 0x100) % 0x100}]
-		set f3   [expr {($f3 + 0x100) % 0x100}]
-
-		set sign [expr {$se1 >> 7}]
-		set exponent [expr {(($se1 & 0x7f) << 1 | ($e2f1 >> 7))}]
-		set f1 [expr {$e2f1 & 0x7f}]
-
-		set fraction [expr {double($f1)*0.0078125 + \
-			double($f2)*3.0517578125e-05 + \
-			double($f3)*1.19209289550781e-07}]
-
-		set res [expr {($sign ? -1. : 1.) * \
-			pow(2.,double($exponent-127)) * \
-			(1. + $fraction)}]
-		return $res
+	variable numberModes {double}
+	# Add a bunch of casters for fixed bit widths.
+	foreach p {8 16 32 64 128} {
+		# Fit number into X bits and return as an unsigned number
+		proc ::tcl::mathfunc::uint$p {n} [string map [list MODBASE [expr 2**$p]] {
+			return [expr entier($n) % MODBASE]
+		}]
+		lappend numberModes uint$p
+		# Fit number into X bits and return as an signed number (2s complement)
+		proc ::tcl::mathfunc::sint$p {n} [string map [list MODBASE [expr 2**$p]] {
+			if {$n >= 0 && $n < MODBASE/2} {return $n}
+			return [expr (entier($n) % MODBASE) - MODBASE]
+		}]
+		lappend numberModes sint$p
 	}
 
-	proc float2IEEE {val {byteorder 0}} {
-		# From http://wiki.tcl.tk/756
-		if {$val > 0} {
-			set sign 0
-		} else {
-			set sign 1
-			set val [expr {-1. * $val}]
-		}
+	# to speed lookups.
+	# ??? mask out {in ni} ops?
+	variable mathops [string map {::tcl::mathop:: ""} [info commands ::tcl::mathop::*]]
+	variable mathfuncs [info functions] 
 
-		# If the following math fails, then it's because of the logarithm.
-		# That means that val is indistinguishable from zero.
-		if {[catch {
-			set exponent [expr {int(floor(log($val)/0.69314718055994529))+127}]
-			set fraction [expr {($val/pow(2.,double($exponent-127)))-1.}]
-		}]} {
-			set exponent 0
-			set fraction 0.0
-		} else {
-			# round off too-small values to zero, throw error for
-			# too-large values
-			if {$exponent < 0} {
-				set exponent 0
-				set fraction 0.0
-			} elseif {$exponent > 255} {
-				error "value $val outside legal range for a float"
-			}
-		}
+	# What we consider a number.
+	variable hexyNumberRex {^(0(x[[:xdigit:]]+|o[0-7]+|b[01]+))$}
+	variable floatyNumberRex {(?x)^(
+		# floats and ints
+		([-]?([1-9][0-9]*|0)(\.[0-9]*)?(e[-+]?[0-9]*)?)
+		# optionally follwed by a label
+		([YZEPTGMkhDdcmunpfazy]|da|[YZEPTGMKk]i)?
+	)$}
+	variable builtins {drop swap rot}
 
-		set fraction [expr {$fraction * 128.}]
-		set f1f      [expr {floor($fraction)}]
-		set fraction [expr {($fraction - $f1f) * 256.}]
-		set f2f      [expr {floor($fraction)}]
-		set fraction [expr {($fraction - $f2f) * 256.}]
-		set f3f      [expr {floor($fraction)}]
+	proc isToken {token} {
+		variable hexyNumberRex
+		variable floatyNumberRex
+		variable mathops
+		variable mathfuncs
+		variable builtins
+		variable defs
+		# this will get called a lot, so cache what we can.
 
-		set f1       [expr {int($f1f)}]
-		set f2       [expr {int($f2f)}]
-		set f3       [expr {int($f3f)}]
+		# is it a number?
+		if {[regexp $hexyNumberRex $token]} {return YES}
+		if {[regexp $floatyNumberRex $token]} {return YES}
 
-		set se1      [expr {($sign ? 128 : 0) | ($exponent >> 1)}]
-		set e2f1     [expr {(($exponent & 0x1) << 7) | $f1}]
+		# is it in ::tcl::mathop?
+		if {$token in $mathops} {return YES}
 
-		if {$byteorder == 0} {
-			set bytes [format "%02x%02x%02x%02x" $se1 $e2f1 $f2 $f3]
-		} else {
-			set bytes [format "%02x%02x%02x%02x" $f3 $f2 $e2f1 $se1]
-		}
-		return $bytes
+		# is it a builtin?
+		if {$token in $builtins} {return YES}
+
+		# is it a history ref? (h####)
+		if {[History::validIndex $token]} {return YES}
+
+		# is it in defines?
+		if {[dict exists $defs $token]} {return YES}
+
+		# is it in ::tcl::mathfunc?
+		if {$token in $mathfuncs} {return YES}
+
+		# No matches found.
+		return NO
 	}
 
-	proc hex2bin {num} {
-		if {[string range $num 0 1] eq "0x"} {
-			set num [string range $num 2 end]
-		}
-		string map -nocase {0 0000 1 0001 2 0010 3 0011 4 0100 5 0101 6 0110 \
-			7 0111 8 1000 9 1001 A 1010 B 1011 C 1100 D 1101 E 1110 F 1111} $num
+	proc isDictModifier {token} {
+		# maybe. still not sure how to handle it.
+		set md [string index $token 0]
+		set nm [string range $token 1 end]
+		if {$md in {@ ! ~} && [string is alnum -strict $nm]} {return YES}
+		return NO
 	}
 
-	proc dec2bin {num} {
-		# From LarsH http://wiki.tcl.tk/1591
-		while {[regexp {[0-9]} $num]} {
-			set num \
-				[string map {o0 0 o1 1 o2 2 o3 3 o4 4 i0 5 i1 6 i2 7 i3 8 i4 9 0 ""} \
-				[string map {0 0o 1 0i 2 1o 3 1i 4 2o 5 2i 6 3o 7 3i 8 4o 9 4i} $num]]
-		}
-		string map {i 1 o 0} $num
+	proc push {value} {
+		variable stack
+		variable mode
+		lappend stack [::tcl::mathfunc::$mode $value]
+		return [lindex $stack end]
 	}
 
-	proc sci2int {value} {
-		# Convert float or sci number to int without hitting size limits. (ie do it as strings)		
-		regexp {([+-]?)([0-9]+)(\.[0-9]*)?e?([+-]?)([0-9]+)?} $value match sign num frac esign pow
-
-		if {$esign eq "-"} {
-			# Value is less than zero, nothing to show.
-			return 0
-		}
-
-		set fraccnt [expr [string length $frac] - 1]
-		if {$fraccnt > 0} {
-			set pow [expr $pow - $fraccnt]
-			if {$pow < 0} {
-				set frac [string range $frac 1 end$pow]
-				set pow 0
-			} else {
-				set frac [string range $frac 1 end]
-			}
-		}
-		if {$pow eq ""} {set pow 0}
-		set zeros [string repeat "0" $pow]
-
-		return $sign$num$frac$zeros
-	}
-
-	proc baseSize {number base} {
-		for {set bytes 0} {$number > 0} {incr bytes} {
-			set number [expr $number / $base]
-		}
-		return $bytes
-	}
-
-	proc best {number} {
-		set powerTable {
-			{yotta Y 24}
-			{zetta Z 21}
-			{exa E 18}
-			{peta P 15}
-			{tera T 12}
-			{giga G 9}
-			{mega M 6}
-			{kilo k 3}
-			{hecto h 2}
-			{deka D 1}
-			{ones "" 0}
-			{deci d -1}
-			{centi c -2}
-			{milli m -3}
-			{micro u -6}
-			{nano n -9}
-			{pico p -12}
-			{femto f -15}
-			{atto a -18}
-			{zepto z -21}
-			{yocto y -24}
-		}
-		# this is intentionally lossy.
-		set percision 3
-		set skiplist {h D d c}
-
-		# convert to float
-		set inum [expr double($number)]
-		# convert to sci
-		set inum [format %.${percision}e $inum]
-
-		# tear into pieces.
-		regexp {([+-]?)([0-9]+)(\.[0-9]*)?e?([+-]?)([0-9]+)?} $inum match sign num frac esign pow
-
-		# find closest, smaller label
-		set lidx -1
-		if {$pow != 0} {
-			set pow $esign[string trimleft $pow 0]
-		}
-		foreach pt $powerTable {
-			lassign $pt n l p
-			incr lidx
-			if {$l in $skiplist} continue
-			if { $p <= $pow } break
-		}
-		if {$lidx == -1} {
-			# Nothing matched, just return what we were given.
-			return $number
-		}
-
-		# adjust it accordingly
-		lassign [lindex $powerTable $lidx] n l p
-
-		set di [expr $pow - $p]
-		set number [expr pow(10,$di) * $sign$num$frac]
-
-		return "$number$l"
-	}
-
-	proc allconvert {num} {
-		# is it labeled?
-		if {[regexp {([YZEPTGMkhDdcmunpfazy]|da|[YZEPTGMKk]i)$} $num]} {
-			set num [tcexpr ecore $num]
-		}
-		# is it a hex, oct, bin?
-		if {[string match {0[xob]*} $num]} {
-			set num [expr {$num}]
-		} else {
-			set num [sci2int $num]
-		}
-
-		lappend res 0x[format %llx $num]
-		lappend res 0o[format %llo $num]
-		lappend res 0b[dec2bin $num]
-		lappend res $num
-		lappend res [format %#g $num]
-		lappend res [best $num]
-	}
-}
-
-
-snit::type TCexpr {
-	option -dopowerlabels yes
-	option -intfmt "%lld"
-	option -floatfmt "%#g"
-	typevariable builtins ""
-	typevariable Labels -array {
-		Y pow(10,24)
-		Z pow(10,21)
-		E pow(10,18)
-		P pow(10,15)
-		T pow(10,12)
-		G pow(10,9)
-		M pow(10,6)
-		k pow(10,3)
-		h pow(10,2)
-		D pow(10,1)
-		da pow(10,1)
-		d pow(10,-1)
-		c pow(10,-2)
-		m pow(10,-3)
-		u pow(10,-6)
-		n pow(10,-9)
-		p pow(10,-12)
-		f pow(10,-15)
-		a pow(10,-18)
-		z pow(10,-21)
-		y pow(10,-24)
-		Yi pow(1024,8)
-		Zi pow(1024,7)
-		Ei pow(1024,6)
-		Pi pow(1024,5)
-		Ti pow(1024,4)
-		Gi pow(1024,3)
-		Mi pow(1024,2)
-		ki pow(1024,1)
-		Ki pow(1024,1)
-	}
-
-	variable variables -array {}
-	variable rhistory -array {}
-	variable rhistNext 0
-
-	typeconstructor {
-		set builtins [info functions]
-	}
-	constructor {args} {
-		$self configurelist $args
-	}
-
-	method save {} {
-		set ret [dict create]
-		dict set ret variables [array get variables]
-		dict set ret rhistory [array get rhistory]
-		dict set ret functions {}
-
-		# Skip builtins, they don't need to be saved.
-		foreach e [info functions] {
-			if {[lsearch -exact $builtins $e] == -1} {
-				dict lappend ret functions $e [list \
-					[info args ::tcl::mathfunc::$e] \
-					[info body ::tcl::mathfunc::$e]]
-			}
-		}
-
+	proc pop {} {
+		variable stack
+		variable mode
+		if {[llength $stack] == 0} {return 0}
+		set ret [::tcl::mathfunc::$mode [lindex $stack end]]
+		set stack [lreplace $stack end end]
 		return $ret
 	}
 
-	method restore {save} {
-		# This overwrites
-		array unset variables
-		array set variables [dict get $save variables]
-		array unset rhistory
-		array set rhistory [dict get $save rhistory]
-		set rhistNext [array size rhistory]
-
-		# Drop all user functions.
-		foreach e [info functions] {
-			if {[lsearch -exact $builtins $e] == -1} {
-				catch {rename ::tcl::mathfunc::$e ""}
-			}
-		}
-		# Now add the saved ones in
-		foreach  {name pbody} [dict get $save functions] {
-			lassign $pbody param body
-			if {[catch {proc ::tcl::mathfunc::$name $param $body} ret]} {
-				puts "Failed to add user func $name because $ret"
-			}
-		}
+	proc peek {} {
+		variable stack
+		variable mode
+		if {[llength $stack] == 0} {return 0}
+		set ret [::tcl::mathfunc::$mode [lindex $stack end]]
+		return $ret
 	}
 
-	method {reset all} {} {
-		$self reset vars
-		$self reset history
-	}
-	method {reset vars} {} {
-		array set variables {}
-	}
-	method {reset history} {} {
-		array set rhistory {}
-		set rhistNext 0
+	proc drop {} {
+		variable stack
+		set stack [lreplace $stack end end]
 	}
 
-	method r {index} {
-		if {$index eq ""} {
-			set index [expr {$rhistNext==0?0:$rhistNext-1}]
-		}
-		if {$index >= $rhistNext} {error ":r$index doesn't exit yet"}
-		return $rhistory($index)
+	proc swap {} {
+		variable stack
+		set r [lreverse [lrange $stack end-1 end]]
+		set stack [lreplace $stack end-1 end {*}$r]
 	}
 
-	method v {name} {
-		if {[array names variables -exact $name] eq ""} {
-			error "No such variable: $name"
-		}
-		return $variables($name)
+	proc rot {} {
+		variable stack
+		set r [lreverse [lrange $stack end-2 end]]
+		set stack [lreplace $stack end-2 end {*}$r]
 	}
 
-	method fmt {num} {
-		# format ints and float seperate.
-		if {[string match {*[.e]*} $num]} {
-			# is a float
-			switch -glob $options(-floatfmt) {
-				{%*b} {
-					# use best label
-					return [::convert::best $num]
-				}
-				{%*[xX]} {
-					return 0x[::convert::float2IEEE $num]
-				}
-				default {
-					set r [format $options(-floatfmt) $num]
-					if {[string index $r end] eq "."} {
-						append r 0
-					}
-					return $r
-				}
-			}
-		} else {
-			# is an int
-			if {[string match {%*b} $options(-intfmt)]} {
-				return 0b[::convert::dec2bin $num]
+	proc do {token} {
+		variable mathops
+		variable mathfuncs
+		variable hexyNumberRex
+		variable floatyNumberRex
+		variable builtins
+		variable numberModes
+		variable mode
+		variable defs
+		# is it a number?
+		if {[regexp $hexyNumberRex $token]} {
+			# bounce thru expr to translate the 0[xbo] into a number
+			push [expr {$token}]
+		} elseif {[regexp $floatyNumberRex $token]} {
+			if {[string is alpha -strict [string index $token end]]} {
+				# has a label; delabel
+				push [convert::delabel $token]
 			} else {
-				return [format $options(-intfmt) $num]
+				# no label; just push
+				push $token
 			}
+		} elseif {$token in $mathops} {
+			set a [pop]
+			if {$token ni {~ !}} {
+				lappend a [pop]
+			}
+			push [::tcl::mathop::$token {*}$a]
+		} elseif {$token in $builtins} {
+			$token
+		} elseif {$token in $numberModes} {
+			set mode $token
+			push [pop]
+		} elseif {[History::validIndex $token]} {
+			# callout to history
+			set hcmd [History::get $token]
+			dolist $hcmd
+		} elseif {[dict exists $defs $token]} {
+			# callout to defines
+			dolist [dict get $defs $token]
+		} elseif {$token in $mathfuncs} {
+			set a [pop]
+			if {$token in {atan2 fmod hypot pow}} {
+				lappend a [pop]
+			}
+			push [::tcl::mathfunc::$token {*}$a]
 		}
-
 	}
 
-	method ecore {args} {
-		set eq [join $args]
-		# Replace result history :r#
-		set eq [string map {\[ \\[ \] \\] \$ \\$ \\ \\\\} $eq]
-		regsub -all {:r(\d*)} $eq \[[mymethod r \\1]\] eq
-		#puts ":rsubs=> $eq"
-		set eq [subst $eq]
-
-		# Replace variables
-		set eq [string map {\[ \\[ \] \\] \$ \\$ \\ \\\\} $eq]
-		regsub -all {(\m[[:alpha:]]+\M)(?!\()} $eq \[[mymethod v \\1]\] eq
-		#puts "vsub=> $eq"
-		set eq [subst $eq]
-
-		# if on, Replace labels
-		if {$options(-dopowerlabels)} {
-			# TODO FIXME This is finding labels in the middle of a hexstring.
-			set reFloat {([-]?([1-9][0-9]*|0)(\.[0-9]*)?(e[-+]?[0-9]*)?)}
-			set reLabels {([YZEPTGMkhDdcmunpfazy]|da|[YZEPTGMKk]i)}
-			regsub -all $reFloat$reLabels $eq \\1*\$[mytypevar Labels](\\5) eq
-			#puts "PLsubs=> $eq"
-			set eq [subst $eq]
+	proc dolist {lst} {
+		foreach tk $lst {
+			do $tk
 		}
-
-		# Pass to ::expr
-		set result [::expr $eq]
-
-		return $result
 	}
 
-	method e {args} {
-		set eq [join $args]
-		# Is this a function assignment?
-		if {[regexp {^([[:alpha:]][[:alnum:]]*)(\([^)]*\))=(.*)} $eq all name param body]} {
-			#puts " ||$name|| ||$param|| ||$body||"
-
-			# Cannot reassign builtin functions.
-			if {$name in $builtins} {
-				error "$name is a reserved function, cannot reassign"
-			}
-
-			if {[regexp {[^[:alpha:],()]} $param]} {
-				error "Invalid parameters: $param"
-			}
-
-			# If it exists, delete it first.
-			if {[info commands ::tcl::mathfunc::$name] ne ""} {
-				#puts "undef $name"
-				rename ::tcl::mathfunc::$name ""
-			}
-
-			if {$body eq ""} {
-				return "$name$param"
-			}
-
-			# Only sub the params, leave others alone.
-			append rex {(\m}
-			append rex [string map {, |} $param]
-			append rex {\M)(?!\()}
-			regsub -all $rex $body {$\1} body
-			# TODO not sure that using mymethod here is best.
-			#      saved functions might be wrong on restore...
-			set body "return \[[mymethod ecore] $body\]"
-			set pparam [string map {( "" ) "" , " "} $param]
-
-			#puts "defun ||$name|| ||$pparam|| ||$body||"
-			proc ::tcl::mathfunc::$name $pparam $body
-
-			return "$name$param"
-		}
-
-		# Is this a variable assignment?
-		if {[regexp {^([[:alpha:]]+)=(.*)} $eq all name body]} {
-			set variables($name) $body
-			return $name
-		}
-
-		# If not a function or variable, then = should not be there.
-		if {[regexp {=} $eq]} {
-			error "Bad assignment format."
-		}
-
-		# Now that assignments have been handled, do the rest.
-		set result [$self ecore $eq]
-
-		# Check for post formatting, apply it.
-		set result [$self fmt $result]
-
-		# Save into result history
-		set rhistory($rhistNext) $result
-		incr rhistNext
-		return $result
+	proc save {dname} {
+		variable stack
+		variable mode
+		upvar $dname dn
+		dict set dn stack $stack
+		dict set dn mode $mode
+		dict set dn history $History::hist
 	}
+
+	proc load {dname} {
+		variable stack
+		variable mode
+		upvar $dname dn
+		if {[dict exists $dn stack]} {
+			set stack [dict get $dn stack]
+		}
+		if {[dict exists $dn mode]} {
+			set mode [dict get $dn mode]
+		}
+		if {[dict exists $dn history]} {
+			set History::hist [dict get $dn history]
+			set History::end [llength $History::hist]
+		}
+	}
+
+	namespace eval History {
+		variable hist {}
+		variable end 0
+
+		proc appendhist {cmd res} {
+			variable hist
+			variable end
+			lappend hist [list h$end [string trim $cmd] $res]
+			incr end
+		}
+
+		proc condense {{to 1}} {
+			variable hist
+			variable end
+			set end $to
+			incr to -1
+			set hist [lrange $hist end-$to end]
+		}
+
+		proc validIndex {hidx} {
+			variable end
+			set idx [string trimleft $hidx h]
+			if {![string is digit -strict $idx]} {
+				return NO
+			}
+			if {$idx >= $end} {
+				return NO
+			}
+			return YES
+		}
+
+		proc get {hidx {which cmd}} {
+			variable hist
+			variable end
+
+			set idx [string trimleft $hidx h]
+			if {![string is digit -strict $idx]} {
+				error "Bad history index"
+			}
+			if {$idx >= $end} {
+				error "Out of range"
+			}
+			if {$which eq "cmd"} {
+				return [lindex $hist $idx 1]
+			} elseif {$which eq "res"} {
+				return [lindex $hist $idx 2]
+			} else {
+				return [lindex $hist $idx]
+			}
+		}
+	}
+
+	namespace eval convert {
+		proc IEEE2float {data {byteorder 0}} {
+			# From http://wiki.tcl.tk/756
+			# reballance as 8 hex nibbles.
+			set data [format "%08X" $data]
+			if {$byteorder == 0} {
+				lassign [regsub -all {(..)} $data "0x\\1 "] se1 e2f1 f2 f3
+			} else {
+				lassign [regsub -all {(..)} $data "0x\\1 "] f3 f2 e2f1 se1
+			}
+
+			set se1  [expr {($se1 + 0x100) % 0x100}]
+			set e2f1 [expr {($e2f1 + 0x100) % 0x100}]
+			set f2   [expr {($f2 + 0x100) % 0x100}]
+			set f3   [expr {($f3 + 0x100) % 0x100}]
+
+			set sign [expr {$se1 >> 7}]
+			set exponent [expr {(($se1 & 0x7f) << 1 | ($e2f1 >> 7))}]
+			set f1 [expr {$e2f1 & 0x7f}]
+
+			set fraction [expr {double($f1)*0.0078125 + \
+				double($f2)*3.0517578125e-05 + \
+				double($f3)*1.19209289550781e-07}]
+
+			set res [expr {($sign ? -1. : 1.) * \
+				pow(2.,double($exponent-127)) * \
+				(1. + $fraction)}]
+			return $res
+		}
+
+		proc float2IEEE {val {byteorder 0}} {
+			# From http://wiki.tcl.tk/756
+			if {$val > 0} {
+				set sign 0
+			} else {
+				set sign 1
+				set val [expr {-1. * $val}]
+			}
+
+			# If the following math fails, then it's because of the logarithm.
+			# That means that val is indistinguishable from zero.
+			if {[catch {
+				set exponent [expr {int(floor(log($val)/0.69314718055994529))+127}]
+				set fraction [expr {($val/pow(2.,double($exponent-127)))-1.}]
+			}]} {
+				set exponent 0
+				set fraction 0.0
+			} else {
+				# round off too-small values to zero, throw error for
+				# too-large values
+				if {$exponent < 0} {
+					set exponent 0
+					set fraction 0.0
+				} elseif {$exponent > 255} {
+					error "value $val outside legal range for a float"
+				}
+			}
+
+			set fraction [expr {$fraction * 128.}]
+			set f1f      [expr {floor($fraction)}]
+			set fraction [expr {($fraction - $f1f) * 256.}]
+			set f2f      [expr {floor($fraction)}]
+			set fraction [expr {($fraction - $f2f) * 256.}]
+			set f3f      [expr {floor($fraction)}]
+
+			set f1       [expr {int($f1f)}]
+			set f2       [expr {int($f2f)}]
+			set f3       [expr {int($f3f)}]
+
+			set se1      [expr {($sign ? 128 : 0) | ($exponent >> 1)}]
+			set e2f1     [expr {(($exponent & 0x1) << 7) | $f1}]
+
+			if {$byteorder == 0} {
+				set bytes [format "%02x%02x%02x%02x" $se1 $e2f1 $f2 $f3]
+			} else {
+				set bytes [format "%02x%02x%02x%02x" $f3 $f2 $e2f1 $se1]
+			}
+			return $bytes
+		}
+
+		proc hex2bin {num} {
+			if {[string range $num 0 1] eq "0x"} {
+				set num [string range $num 2 end]
+			}
+			string map -nocase {0 0000 1 0001 2 0010 3 0011 4 0100 5 0101 6 0110 \
+				7 0111 8 1000 9 1001 A 1010 B 1011 C 1100 D 1101 E 1110 F 1111} $num
+		}
+
+		proc dec2bin {num} {
+			# From LarsH http://wiki.tcl.tk/1591
+			while {[regexp {[0-9]} $num]} {
+				set num \
+					[string map {o0 0 o1 1 o2 2 o3 3 o4 4 i0 5 i1 6 i2 7 i3 8 i4 9 0 ""} \
+					[string map {0 0o 1 0i 2 1o 3 1i 4 2o 5 2i 6 3o 7 3i 8 4o 9 4i} $num]]
+			}
+			string map {i 1 o 0} $num
+		}
+
+		proc sci2int {value} {
+			# Convert float or sci number to int without hitting size limits. (ie do it as strings)		
+			regexp {([+-]?)([0-9]+)(\.[0-9]*)?e?([+-]?)([0-9]+)?} $value match sign num frac esign pow
+
+			if {$esign eq "-"} {
+				# Value is less than zero, nothing to show.
+				return 0
+			}
+
+			set fraccnt [expr [string length $frac] - 1]
+			if {$fraccnt > 0} {
+				set pow [expr $pow - $fraccnt]
+				if {$pow < 0} {
+					set frac [string range $frac 1 end$pow]
+					set pow 0
+				} else {
+					set frac [string range $frac 1 end]
+				}
+			}
+			if {$pow eq ""} {set pow 0}
+			set zeros [string repeat "0" $pow]
+
+			return $sign$num$frac$zeros
+		}
+
+		proc baseSize {number base} {
+			for {set bytes 0} {$number > 0} {incr bytes} {
+				set number [expr $number / $base]
+			}
+			return $bytes
+		}
+
+		array set labelTable {
+			Y pow(10,24)
+			Z pow(10,21)
+			E pow(10,18)
+			P pow(10,15)
+			T pow(10,12)
+			G pow(10,9)
+			M pow(10,6)
+			k pow(10,3)
+			h pow(10,2)
+			D pow(10,1)
+			da pow(10,1)
+			d pow(10,-1)
+			c pow(10,-2)
+			m pow(10,-3)
+			u pow(10,-6)
+			n pow(10,-9)
+			p pow(10,-12)
+			f pow(10,-15)
+			a pow(10,-18)
+			z pow(10,-21)
+			y pow(10,-24)
+			Yi pow(1024,8)
+			Zi pow(1024,7)
+			Ei pow(1024,6)
+			Pi pow(1024,5)
+			Ti pow(1024,4)
+			Gi pow(1024,3)
+			Mi pow(1024,2)
+			ki pow(1024,1)
+			Ki pow(1024,1)
+		}
+		proc delabel {number} {
+			variable labelTable
+			return [expr [subst [regsub {([YZEPTGMkhDdcmunpfazy]|da|[YZEPTGMKk]i)} $number *\$labelTable(\\1)]]]
+		}
+
+		proc best {number {percision 3}} {
+			set powerTable {
+				{yotta Y 24}
+				{zetta Z 21}
+				{exa E 18}
+				{peta P 15}
+				{tera T 12}
+				{giga G 9}
+				{mega M 6}
+				{kilo k 3}
+				{hecto h 2}
+				{deka D 1}
+				{ones "" 0}
+				{deci d -1}
+				{centi c -2}
+				{milli m -3}
+				{micro u -6}
+				{nano n -9}
+				{pico p -12}
+				{femto f -15}
+				{atto a -18}
+				{zepto z -21}
+				{yocto y -24}
+			}
+			# this is intentionally lossy.
+			set skiplist {h D d c}
+
+			# convert to float
+			set inum [expr double($number)]
+			# convert to sci
+			set inum [format %.${percision}e $inum]
+
+			# tear into pieces.
+			regexp {([+-]?)([0-9]+)(\.[0-9]*)?e?([+-]?)([0-9]+)?} $inum match sign num frac esign pow
+
+			# find closest, smaller label
+			set lidx -1
+			if {$pow != 0} {
+				set pow $esign[string trimleft $pow 0]
+			}
+			foreach pt $powerTable {
+				lassign $pt n l p
+				incr lidx
+				if {$l in $skiplist} continue
+				if { $p <= $pow } break
+			}
+			if {$lidx == -1} {
+				# Nothing matched, just return what we were given.
+				return $number
+			}
+
+			# adjust it accordingly
+			lassign [lindex $powerTable $lidx] n l p
+
+			set di [expr $pow - $p]
+			set number [expr pow(10,$di) * $sign$num$frac]
+
+			return "$number$l"
+		}
+
+		proc fmt {num as {size 64} {is wide}} {
+			if {$is eq "double"} {
+				set inum [expr 0x[float2IEEE $num]]
+			} else {
+				set inum [sci2int $num]
+			}
+			set inum [expr {$inum & (entier(pow(2,$size))-1)}]
+			switch $as {
+				hex { return 0x[format %llx $inum] }
+				oct { return 0o[format %llo $inum] }
+				bin { return 0b[dec2bin $inum] }
+				default { return $num }
+			}
+		}
+	}
+
 }
-TCexpr ::tcexpr
 
-snit::widget TCWorksheet {
-	# EvalCommand is who does the work.
-	option -evalcommand "::tcexpr e"
-	option -rightindent 18
-	option -postevalcommand ""
-
-	# Remember where we were for command history type thing
-	variable ehist ""
+snit::widget TCDefinesView {
+	option -definesvar ""
 
 	constructor {args} {
 		$self configurelist $args
 
-		# TODO Add UI elements for
-		# 		- reset/clear
-		# 		- Changing output formats
-		text $win.t \
-			-foreground #3B2322 \
-			-background #DFDBC3 \
-			-borderwidth 0 \
-			-tabstyle tabular \
-			-wrap word \
-			-undo yes \
-			-autoseparators yes \
-			-yscrollcommand [list $win.y set]
+		tablelist::tablelist $win.t \
+			-activestyle none \
+			-showlabels no \
+			-yscrollcommand [list $win.y set] \
+			-height 10
 		scrollbar $win.y -orient vert -command [list $win.t yview]
-
-		grid $win.t -row 0 -column 0 -sticky news
-		grid $win.y -row 0 -column 1 -sticky nes
+		grid $win.t -column 0 -row 0 -sticky news
+		grid $win.y -column 1 -row 0 -sticky nes
 		grid columnconfigure $win 0 -weight 1
 		grid rowconfigure $win 0 -weight 1
 
+	}
+}
 
-		$win.t tag configure equation -foreground #3B2322
-		$win.t tag configure result -foreground #7B6362
-		$win.t tag configure error -foreground red
+snit::widget TCVariablesView {
+	option -variablesvar ""
 
-		$self updateResultTabs [expr [$win.t cget -width] * [font measure [$win.t cget -font] 0]]
-		bind $win.t <Configure> [mymethod updateResultTabs %w]
+	constructor {args} {
+		$self configurelist $args
 
-		bind $win.t <Shift-Return> {%W insert insert \n; %W see insert; break}
-		bind $win.t <Key-Return> "[mymethod doeval]; break"
-		bind $win.t <Key-Tab> {%W insert insert "  "; break}
-		bind $win.t <Alt-Up> "[mymethod hist prev]; break"
-		bind $win.t <Alt-Down> "[mymethod hist next]; break"
+		tablelist::tablelist $win.t \
+			-activestyle none \
+			-columns {0 name left 0 value right} \
+			-showlabels no \
+			-yscrollcommand [list $win.y set] \
+			-height 10
+		scrollbar $win.y -orient vert -command [list $win.t yview]
+		grid $win.t -column 0 -row 0 -sticky news
+		grid $win.y -column 1 -row 0 -sticky nes
+		grid columnconfigure $win 0 -weight 1
+		grid rowconfigure $win 0 -weight 1
 
-		bind $win.t <Button-3> [mymethod altClick %X %Y]
+	}
+}
 
-		focus $win.t
+snit::widget TCStackView {
+	option -stackvar ""
+	option -statusvar ""
+	option -numberbase dec
+
+	variable stack {}
+
+	constructor {args} {
+		$self configurelist $args
+
+		panedwindow $win.p
+
+		frame $win.p.s
+		tablelist::tablelist $win.p.s.l \
+			-activestyle none \
+			-columns {0 sv right} \
+			-listvariable [myvar stack] \
+			-showlabels no \
+			-selectmode single \
+			-selecttype row \
+			-stretch all
+		# TODO hilite top row
+		label $win.p.s.m -text "[subst $$options(-statusvar)] $options(-numberbase)"
+		pack $win.p.s.l -fill both -expand yes
+		pack $win.p.s.m -side bottom -fill x
+		$win.p add $win.p.s -sticky news
+
+		frame $win.p.dv
+		grid [label $win.p.dv.al -text Actual] -column 0 -row 0 -sticky e
+		grid [entry $win.p.dv.a -state readonly] -column 1 -row 0 -sticky we
+		grid [label $win.p.dv.dl -text Decimal] -column 0 -row 1 -sticky e
+		grid [entry $win.p.dv.d -state readonly] -column 1 -row 1 -sticky we
+		grid [label $win.p.dv.hl -text Hex] -column 0 -row 2 -sticky e
+		grid [entry $win.p.dv.h -state readonly] -column 1 -row 2 -sticky we
+		grid [label $win.p.dv.ol -text Oct] -column 0 -row 3 -sticky e
+		grid [entry $win.p.dv.o -state readonly] -column 1 -row 3 -sticky we
+		grid [label $win.p.dv.bl -text Bin] -column 0 -row 4 -sticky e
+		grid [entry $win.p.dv.b -state readonly] -column 1 -row 4 -sticky we
+		grid [BitView $win.p.dv.bv] -column 1 -row 5 -sticky w
+		$win.p add $win.p.dv -sticky new
+
+		pack $win.p -fill both -expand yes
+
+		# for now, only a read view of the stack. Later versions may allow
+		# for editing the stack elements in the UI.
+		trace add variable $options(-stackvar) write [mymethod updateStack]
+		trace add variable $options(-statusvar) write [mymethod updateStatus]
+	}
+	destructor {
+		trace remove variable $options(-stackvar) write [mymethod updateStack]
+		trace remove variable $options(-statusvar) write [mymethod updateStatus]
 	}
 
-	method updateResultTabs {width} {
-		incr width -2
-		set fontwidth [font measure [$win.t cget -font] 0]
-		set align [expr $width - ($options(-rightindent) * $fontwidth)]
-		if {$align <= 0} return
-		$win.t tag configure result -tabs "$align numeric"
+	method updateStatus {name1 name2 op} {
+		upvar $name1 status
+		$win.p.s.m configure -text "$status $options(-numberbase)"
 	}
 
-	method {hist prev} {} {
-		if {$ehist eq ""} {set ehist {"insert linestart" "insert lineend"}}
-		set ehist [$win.t tag prevrange equation [lindex $ehist 0]]
-		if {$ehist eq ""} {
-			set eq ""
-		} else {
-			set eq [$win.t get {*}$ehist]
-		}
-		$win.t replace "insert linestart" "insert lineend" $eq equation
+	method updateInfo {} {
+		set tn [lindex $stack 0]
+		if {$tn eq ""} return
+		$win.p.dv.a configure -state normal
+		$win.p.dv.a delete 0 end
+		$win.p.dv.a insert end $tn
+		$win.p.dv.a configure -state readonly
+
+		$win.p.dv.d configure -state normal
+		$win.p.dv.d delete 0 end
+		$win.p.dv.d insert end [::TCFive::convert::fmt $tn dec]
+		$win.p.dv.d configure -state readonly
+
+		$win.p.dv.h configure -state normal
+		$win.p.dv.h delete 0 end
+		$win.p.dv.h insert end [::TCFive::convert::fmt $tn hex]
+		$win.p.dv.h configure -state readonly
+
+		$win.p.dv.o configure -state normal
+		$win.p.dv.o delete 0 end
+		$win.p.dv.o insert end [::TCFive::convert::fmt $tn oct]
+		$win.p.dv.o configure -state readonly
+
+		$win.p.dv.b configure -state normal
+		$win.p.dv.b delete 0 end
+		$win.p.dv.b insert end [::TCFive::convert::fmt $tn bin]
+		$win.p.dv.b configure -state readonly
+
+		$win.p.dv.bv configure -value [::TCFive::convert::sci2int $tn]
 	}
 
-	method {hist next} {} {
-		if {$ehist eq ""} {set ehist {"1.0" "1.0"}}
-		set ehist [$win.t tag nextrange equation [lindex $ehist 1]]
-		if {$ehist eq ""} {
-			set eq ""
-		} else {
-			set eq [$win.t get {*}$ehist]
-		}
-		$win.t replace "insert linestart" "insert lineend" $eq equation
-	}
-
-	method {hist reset} {} {
-		set ehist ""
-	}
-
-	method doeval {} {
-		# Get some hard indexes since we'll use them a bunch
-		set linestart [$win.t index "insert linestart"]
-		set lineend [$win.t index "insert lineend"]
-
-		# get the current line.
-		#  If it starts with \t, it is a result line. NOP.
-		set line [$win.t get $linestart $lineend]
-		if {[string length $line] == 0} return
-		if {[string index $line 0] eq "\t"} return
-
-		# Mark for undo.
-		$win.t edit separator
-
-		# Ok, make sure the line is tagged as equation
-		#  Just remove and re-add the tag.
-		$win.t tag remove equation $linestart $lineend
-		$win.t tag add equation $linestart $lineend
-
-		# reset history scanner
-		$self hist reset
-
-		# Catch errors and just display them
-		if {[catch {uplevel #0 $options(-evalcommand) $line} results opts]} {
-			# Error.
-			$win.t insert $lineend "\n" {} $results error
-		} else {
-			# Show the result
-			$win.t insert $lineend "\n" {} "\t$results " result
-		}
-		$win.t mark set insert "$lineend +2line linestart"
-
-		# Try to make sure that there is always an empty line at the end
-		if {[$win.t get "end -2 char"] ne "\n"} {
-			$win.t insert end "\n"
-		}
-		$win.t see insert
-
-		# run a post eval action.  Primarily used to save the state to
-		# disk.
-		if {$options(-postevalcommand) ne ""} {
-			after idle [list uplevel #0 $options(-postevalcommand)]
-		}
-	}
-
-	method save {} {
-		set save {}
-
-		# Since tags appear multiple times, but only need to be configured
-		# once,  Load up the configurations first.
-		foreach tname [$win.t tag names] {
-			set r {}
-			foreach item [$win.t tag configure $tname] {
-				if {[string length [lindex $item 4]] > 0} {
-					lappend r [lindex $item 0] [lindex $item 4]
-				}
-			}
-			lappend save tagconf $tname $r
-		}
-		# Now dump all the text and tag positions.
-		append save " " [$win.t dump -text -tag 1.0 end]
-
-		# for now, we're skipping images and windows. Since the text widget
-		# only stores a reference to the actual, this is more complex.
-		# We also may never need to do it.
-
-		# due to their nature, we want to grab marks and their gravity last
-		append save " " [$win.t dump -mark 1.0 end]
-		foreach key [$win.t mark names] {
-			lappend save markconf $key [$win.t mark gravity $key]
-		}
-		return $save
-	}
-
-	method restore {save} {
-		$win.t delete 1.0 end
-		foreach {key value index} $save {
-			switch $key {
-				text {$win.t insert $index $value}
-				mark {$win.t mark set $value $index}
-				markconf {$win.t mark gravity $value $index}
-				tagon {set tag($value) $index}
-				tagoff {$win.t tag add $value $tag($value) $index}
-				tagconf {$win.t tag configure $value {*}$index}
-			}
-		}
-		$win.t see insert
-	}
-
-	method nuc {} {
-		# Break line into list of numbers and indexes.
-		set start [$win.t index "current linestart"]
-		set end [$win.t index "current lineend"]
-		set current [$win.t index current]
-
-		# one REGEXP to find it all...
-		set rex {(}
-		# hex, oct, bin numbers.
-		append rex {0(x[[:xdigit:]]+|o[0-7]+|b[01]+)}
-		append rex |
-		# floats and ints
-		append rex {([-]?([1-9][0-9]*|0)(\.[0-9]*)?(e[-+]?[0-9]*)?)}
-		# labels
-		append rex {([YZEPTGMkhDdcmunpfazy]|da|[YZEPTGMKk]i)?}
-		append rex {)}
-
-		set lens {}
-		set starts [$win.t search -all -regexp -count lens $rex $start $end]
-		#puts "== $starts == $lens =="
-
-		set result {}
-		foreach b $starts l $lens {
-			set e [$win.t index "$b + $l chars"]
-			if {[$win.t compare $current >= $b] &&
-				[$win.t compare $current <= $e]} {
-				lappend result [$win.t get $b $e] $b $e
-			}
-		}
-		
-		return $result
-	}
-
-	method altClick {winX winY} {
-		set numl [$self nuc]
-		if {$numl eq ""} return
-		lassign $numl num begin end
-		$win.t tag remove sel 1.0 end
-		$win.t tag add sel $begin $end
-
-		lassign [::convert::allconvert $num] hex oct bin dec float blabel
-
-		catch {destroy $win.popup}
-		set m [menu $win.popup -tearoff no]
-		$m add command -label "Hex - $hex" \
-			-command [list $win.t replace $begin $end $hex]
-		$m add command -label "Oct - $oct" \
-			-command [list $win.t replace $begin $end $oct]
-		$m add command -label "Bin - $bin" \
-			-command [list $win.t replace $begin $end $bin]
-		$m add command -label "Dec - $dec" \
-			-command [list $win.t replace $begin $end $dec]
-		$m add command -label "Float - $float" \
-			-command [list $win.t replace $begin $end $float]
-		$m add command -label "Best Label - $blabel" \
-			-command [list $win.t replace $begin $end $blabel]
-
-		$win.t edit separator
-		tk_popup $win.popup $winX $winY
+	method updateStack {name1 name2 op} {
+		upvar $name1 lst
+		set stack [lreverse $lst]
+		after idle [mymethod updateInfo]
 	}
 
 }
 
+snit::widget TCHistoryView {
+	option -historyvar ""
 
-namespace eval gui {
-	proc go {} {
-		set fn [setPath TCv4]
-		TCWorksheet .c -postevalcommand [list ::gui::saveData $fn]
-		pack .c -fill both -expand yes
-		bind . <Control-Key-1> {console show; break}
-		wm client . "Tadpol Calc 4"
-		wm title . "tc v4"
+	constructor {args} {
+		$self configurelist $args
 
-		after idle [list ::gui::restoreData $fn]
+		tablelist::tablelist $win.hist \
+			-activestyle none \
+			-columns {6 idx left 0 command left 15 result right} \
+			-height 10 \
+			-listvariable $options(-historyvar) \
+			-showlabels no \
+			-selectmode single \
+			-selecttype row \
+			-stretch {1} \
+			-yscrollcommand [list $win.y set]
+		scrollbar $win.y -orient vert -command [list $win.hist yview]
+		grid $win.hist -column 0 -row 0 -sticky news
+		grid $win.y -column 1 -row 0 -sticky nes
+		grid columnconfigure $win 0 -weight 1
+		grid rowconfigure $win 0 -weight 1
+	}
+	destructor {
+	}
+}
 
-		focus -force .
+snit::widget TCWorksheet {
+	option -statefile "tcfive.state"
+
+	# ??? should fallbacks be part of the TCFive?
+	variable fallbacks {}
+
+	constructor {args} {
+		$self configurelist $args
+
+		option add *Text.foreground #3B2322
+		option add *Text.background #DFDBC3
+		option add *Text.selectBackground #7B6362
+		option add *Tablelist.foreground #3B2322
+		option add *Tablelist.background #DFDBC3
+		option add *Tablelist.selectBackground #7B6362
+		# this works, but still could be better.
+		option add *Tablelist.stripeBackground lightgrey
+		# Need a color for SystemButtonFace
+		#option add *Panedwindow.background #DFDBC3
+
+		panedwindow $win.p -orient vert
+
+		TCStackView $win.p.sv -stackvar ::TCFive::stack -statusvar ::TCFive::mode
+
+		TCHistoryView $win.p.th -historyvar ::TCFive::History::hist
+
+		text $win.p.cmd -height 3 \
+			-borderwidth 0 \
+			-tabstyle tabular \
+			-wrap word
+
+		$win.p.cmd tag configure notAToken -foreground red -overstrike yes
+
+		# Do not want free form editing.  Cursor only exists at the right.
+		bind $win.p.cmd <KeyPress> {%W mark set insert end}
+
+		bind $win.p.cmd <Key-Return> "[mymethod onEnterKey]; break"
+		bind $win.p.cmd <Key-space> "[mymethod onDoToken]; break"
+		bind $win.p.cmd <Key-Tab> "[mymethod onAutoComplete]; break"
+		bind $win.p.cmd <Key-Escape> "[mymethod onEsckey]; break"
+		bind $win.p.cmd <Key-BackSpace> [mymethod onBackspace]
+		bind $win.p.cmd <Control-Key-h> [mymethod onBackspace]
+
+		$win.p.cmd mark set tokenstart 1.0
+		$win.p.cmd mark gravity tokenstart left
+
+		$win.p add $win.p.sv -sticky news
+		$win.p add $win.p.th -sticky news
+		$win.p add $win.p.cmd -sticky news
+		pack $win.p -fill both -expand yes
+
+		after idle [mymethod restore]
 	}
 
-	proc gone {} {
-		destroy .c
+	method onEsckey {} {
+		# Revert stack to bottom of fallbacks.
+		if {[llength $fallbacks] > 0} {
+			set ::TCFive::stack [lindex $fallbacks 0]
+		}
+		# Clear out fallback stacks
+		set fallbacks {}
+		# clear window
+		$win.p.cmd delete 1.0 end
+		$win.p.cmd mark set tokenstart 1.0
 	}
 
-	proc saveData {fname} {
-		dict set data expr [::tcexpr save]
-		dict set data text [.c save]
+	method onEnterKey {} {
+		# when empty, do nothing.
+		if {[string trim [$win.p.cmd get 1.0 end]] eq ""} return
 
+		$self onDoToken
+		if {[$win.p.cmd tag prevrange notAToken end] eq ""} {
+			# No token errors.
+
+			# push command and top of stack to history.
+			::TCFive::History::appendhist [$win.p.cmd get 1.0 end] [::TCFive::peek]
+			# Clear out fallback stacks
+			set fallbacks {}
+			# clear window
+			$win.p.cmd delete 1.0 end
+			$win.p.cmd mark set tokenstart 1.0
+		}
+	}
+
+	method onDoToken {} {
+		set token [string trim [$win.p.cmd get tokenstart "tokenstart lineend"]]
+
+		if {$token eq ""} return
+
+		# Check if it is valid.
+		if {![::TCFive::isToken $token]} {
+			# If no, errors how?
+			$win.p.cmd tag add notAToken tokenstart "tokenstart lineend"
+		} else {
+			$win.p.cmd insert end " "
+			# push stack copy to fallbacks
+			lappend fallbacks $::TCFive::stack
+			# do token.
+			::TCFive::do $token
+			$win.p.cmd mark set tokenstart "tokenstart lineend"
+		}
+		$win.p.cmd edit separator
+		after idle [mymethod save]
+	}
+
+	method onBackspace {} {
+		# Deleting non-space just deletes.  Deleting a space, needs to undo the stack.
+		set todel [$win.p.cmd get "insert -1 char"]
+		if {$todel eq " "} {
+			if {[llength $fallbacks] > 0} {
+				set ::TCFive::stack [lindex $fallbacks end]
+				set fallbacks [lreplace $fallbacks end end]
+			}
+			# move token start.
+			set ts [lindex [.c.p.cmd search -all -regexp {\S+} 1.0] end]
+			if {$ts eq ""} {
+				set ts 1.0
+			}
+			$win.p.cmd mark set tokenstart $ts
+		}
+		# If deleting into a notAToken, clear notAToken. (since they're editing it.)
+		if {"notAToken" in [$win.p.cmd tag names "insert -1 char"]} {
+			$win.p.cmd tag remove notAToken {*}[$win.p.cmd tag ranges notAToken]
+		}
+	}
+
+	method onAutoComplete {} {
+		set partial [$win.p.cmd get tokenstart insert]
+		set choices [lsearch -all -inline [info functions] ${partial}*]
+		if {[llength $choices] == 1} {
+			$win.p.cmd replace tokenstart insert $choices
+		} else {
+			catch {destroy $win.p.cmd.completepopup}
+			set m [menu $win.p.cmd.completepopup -tearoff 0]
+			foreach mi $choices {
+				$m add command -label $mi -command "$win.p.cmd replace tokenstart insert $mi"
+			}
+			set bb [$win.p.cmd bbox tokenstart]
+			set x [expr [winfo rootx $win.p.cmd] + [lindex $bb 0]]
+			set y [expr [winfo rooty $win.p.cmd] + [lindex $bb 1] + [lindex $bb 3]]
+			tk_popup $m $x $y
+		}
+	}
+
+	method save {} {
+		# save state of cmd window (plus TCFive state.)
+		set data [dict create]
+		dict set data command [$win.p.cmd dump -text -tag -mark 1.0 end]
+		dict set data fallbacks $fallbacks
+		::TCFive::save data
+
+		# to a file...
+		set fname $options(-statefile)
 		set tname $fname-[clock seconds]
 		set fd [open $tname w]
 		puts $fd $data
 		close $fd
-
 		file rename -force -- $tname $fname
 	}
 
-	proc restoreData {fname} {
+	method restore {} {
+		set fname $options(-statefile)
 		if {![file exists $fname]} {
 			return
 		}
@@ -756,44 +833,44 @@ namespace eval gui {
 		set data [read $fd]
 		close $fd
 
-		::tcexpr restore [dict get $data expr]
-		.c restore [dict get $data text]
-	}
-
-	proc setPath {fname} {
-		set path ""
-		switch -glob $::tcl_platform(os) {
-			Windows* {
-				if {[info exists ::env(APPDATA)]} {
-					set path $::env(APPDATA)
-				} else {
-					set path $::env(HOME)
-				}
-				# If no extenstion, add one. Otherwise use what was given
-				if {[file extension $fname] eq ""} {
-					set fname ${fname}.rc
-				}
-			}
-			macintosh {
-				set path [file join $::env(HOME) Library Preferences]
-				if {[string range $fname end-1 end] ne "rc"} {
-					set fname ${fname}rc
-				}
-			}
-			default {
-				# assume a Unix style prefernce file.
-				if {[string index $fname 0] ne "."} {
-					set fname .$fname
-				}
-				if {[string range $fname end-1 end] ne "rc"} {
-					set fname ${fname}rc
-				}
-				set path $::env(HOME)
+		::TCFive::load data
+		set fallbacks [dict get $data fallbacks]
+		
+		$win.p.cmd delete 1.0 end
+		foreach {key value index} [dict get $data command] {
+			switch $key {
+				text {$win.p.cmd insert $index $value}
+				mark {$win.p.cmd mark set $value $index}
+				tagon {set tag($value) $index}
+				tagoff {$win.p.cmd tag add $value $tag($value) $index}
 			}
 		}
-		return [file join $path $fname]
+		# deal with TK weirdism that adds newlines when dumping and restoring
+		if {[$win.p.cmd get "end -2 indices" end] eq "\n\n"} {
+			$win.p.cmd delete "end -1 indices"
+		}
+		$win.p.cmd see insert
 	}
+}
+
+namespace eval gui {
+
+	proc go {} {
+		TCWorksheet .c
+		pack .c -fill both -expand yes
+		wm client . "Tadpol Calc 5"
+		wm title . "tc v5"
+
+		bind . {<Alt-\>} {catch {console show}}
+
+		focus -force .
+	}
+	proc done {} {
+		destroy .c
+	}
+
 }
 
 gui::go
 
+# vim: set ai sw=4 ts=4 :
