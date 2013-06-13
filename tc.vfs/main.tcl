@@ -206,6 +206,7 @@ namespace eval TCFive {
 	namespace eval History {
 		variable hist {}
 		variable end 0
+		variable histRex {^h(\d+)(v)?$}
 
 		proc appendhist {cmd res} {
 			variable hist
@@ -224,8 +225,9 @@ namespace eval TCFive {
 
 		proc validIndex {hidx} {
 			variable end
-			set idx [string trimleft $hidx h]
-			if {![string is digit -strict $idx]} {
+			variable histRex
+
+			if {![regexp -- $histRex $hidx all idx value]} {
 				return NO
 			}
 			if {$idx >= $end} {
@@ -234,23 +236,22 @@ namespace eval TCFive {
 			return YES
 		}
 
-		proc get {hidx {which cmd}} {
+		proc get {hidx} {
 			variable hist
 			variable end
+			variable histRex
 
-			set idx [string trimleft $hidx h]
-			if {![string is digit -strict $idx]} {
-				error "Bad history index"
+			if {![regexp -- $histRex $hidx all idx value]} {
+				error "Bad history index \"$hidx\" "
 			}
 			if {$idx >= $end} {
-				error "Out of range"
+				error "Out of range ($idx >= $end)"
 			}
-			if {$which eq "cmd"} {
+
+			if {$value eq ""} {
 				return [lindex $hist $idx 1]
-			} elseif {$which eq "res"} {
-				return [lindex $hist $idx 2]
 			} else {
-				return [lindex $hist $idx]
+				return [lindex $hist $idx 2]
 			}
 		}
 	}
