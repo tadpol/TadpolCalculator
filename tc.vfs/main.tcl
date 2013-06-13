@@ -715,10 +715,10 @@ snit::widget TCWorksheet {
 		bind $win.p.cmd <Key-BackSpace> [mymethod onBackspace]
 		bind $win.p.cmd <Control-Key-h> [mymethod onBackspace]
 
-		bind $win.p.cmd <Alt-d> "::TCFive::do drop; $self save; break"
-		bind $win.p.cmd <Alt-D> "::TCFive::do dup; $self save; break"
-		bind $win.p.cmd <Alt-s> "::TCFive::do swap; $self save; break"
-		bind $win.p.cmd <Alt-r> "::TCFive::do rot; $self save; break"
+		bind $win.p.cmd <Alt-d> "::TCFive::do drop; after idle [mymethod save]; break"
+		bind $win.p.cmd <Alt-D> "::TCFive::do dup; after idle [mymethod save]; break"
+		bind $win.p.cmd <Alt-s> "::TCFive::do swap; after idle [mymethod save]; break"
+		bind $win.p.cmd <Alt-r> "::TCFive::do rot; after idle [mymethod save]; break"
 
 		$win.p.cmd mark set tokenstart 1.0
 		$win.p.cmd mark gravity tokenstart left
