@@ -218,7 +218,8 @@ namespace eval TCFive {
 		proc appendhist {cmd res} {
 			variable hist
 			variable end
-			lappend hist [list h$end [string trim $cmd] $res]
+			# Note: the first item is rewritten by the tableview.
+			lappend hist [list $end [string trim $cmd] $res]
 			incr end
 		}
 
@@ -662,6 +663,8 @@ snit::widget TCHistoryView {
 			-selecttype row \
 			-stretch {1} \
 			-yscrollcommand [list $win.y set]
+		$win.hist columnconfigure 0 -formatcommand [mymethod indexFormater]
+		$win.hist columnconfigure 0 -showlinenumbers YES
 		scrollbar $win.y -orient vert -command [list $win.hist yview]
 		grid $win.hist -column 0 -row 0 -sticky news
 		grid $win.y -column 1 -row 0 -sticky nes
@@ -669,6 +672,10 @@ snit::widget TCHistoryView {
 		grid rowconfigure $win 0 -weight 1
 	}
 	destructor {
+	}
+
+	method indexFormater {value} {
+		return h[expr {$value - 1}]
 	}
 }
 
