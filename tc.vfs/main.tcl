@@ -41,7 +41,7 @@ namespace eval TCFive {
 		# optionally follwed by a label
 		([YZEPTGMkhDdcmunpfazy]|da|[YZEPTGMKk]i)?
 	)$}
-	variable builtins {drop swap rot}
+	variable builtins {drop dup swap rot}
 
 	proc isToken {token} {
 		variable hexyNumberRex
@@ -112,6 +112,13 @@ namespace eval TCFive {
 		set stack [lreplace $stack end end]
 	}
 
+	proc dup {} {
+		variable stack
+		if {[llength $stack] > 0} {
+			lappend stack [lindex $stack end]
+		}
+	}
+
 	proc swap {} {
 		variable stack
 		set r [lreverse [lrange $stack end-1 end]]
@@ -120,8 +127,8 @@ namespace eval TCFive {
 
 	proc rot {} {
 		variable stack
-		set r [lreverse [lrange $stack end-2 end]]
-		set stack [lreplace $stack end-2 end {*}$r]
+		lassign [lrange $stack end-2 end] a b c
+		set stack [lreplace $stack end-2 end $b $c $a]
 	}
 
 	proc do {token} {
