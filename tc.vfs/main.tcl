@@ -344,6 +344,8 @@ namespace eval TCFive {
 			return $bytes
 		}
 
+		# TODO Need double versions of the float-IEEE functions above
+
 		proc hex2bin {num} {
 			if {[string range $num 0 1] eq "0x"} {
 				set num [string range $num 2 end]
@@ -550,6 +552,88 @@ snit::widget TCVariablesView {
 	}
 }
 
+snit::widget TCNumberView {
+	option -mode -default Actual -validatemethod validateMode -type snit::stringtype
+	option -textvariable -default "" -configuremethod setTextVariable -type snit::stringtype
+	option -labelwidth 0
+
+	typevariable modeList {Actual Decimal Hex Octal Binary IEEE-Hex}
+	variable internalvalue 0
+
+	constructor {args} {
+		$self configurelist $args
+
+		label $win.l -text Actual -width $options(-labelwidth)
+		entry $win.v -state readonly
+		pack $win.l -side left -fill x -expand no
+		pack $win.v -side right -fill x -expand yes
+
+		after idle [mymethod show]
+	}
+	destructor {
+		trace remove variable $options(-textvariable) write [mymethod tvChanged]
+	}
+
+	method show {} {
+		switch $options(-mode) {
+			Actual {
+				set v $internalvalue
+			}
+			Decimal {
+				set v [::TCFive::convert::fmt $internalvalue dec]
+			}
+			Hex {
+				set v [::TCFive::convert::fmt $internalvalue hex]
+			}
+			Octal {
+				set v [::TCFive::convert::fmt $internalvalue oct]
+			}
+			Binary {
+				set v [::TCFive::convert::fmt $internalvalue bin]
+			}
+			IEEE-Hex {
+				if {![catch {::TCFive::convert::float2IEEE $internalvalue} v]} {
+					set v " --error-- "
+				}
+			}
+		}
+
+		$win.v configure -state normal
+		$win.v delete 0 end
+		$win.v insert end $v
+		$win.v configure -state readonly
+	}
+
+	method validateMode {option value} {
+		if {$option eq "-mode"} {
+			if {$value ni $modeList} {
+				error "option -mode must be one of \"$modeList\""
+			}
+		}
+	}
+
+	method tvChanged {name1 name2 op} {
+		upvar $name1 value
+		set internalvalue $value
+		after idle [mymethod show]
+	}
+
+	method setTextVariable {option value} {
+		if {$options(-textvariable) ne ""} {
+			upvar \#0 $options(-textvariable) TheVariable
+			trace remove variable TheVariable write [mymethod tvChanged]
+		}
+		set internalvalue $value
+		if {$options(-textvariable) ne ""} {
+			set options(-textvariable) $value
+			upvar \#0 $options(-textvariable) TheVariable
+			if {![info exists TheVariable]} {set TheVariable 0}
+			trace add variable TheVariable write [mymethod tvChanged]
+		}
+		after idle [mymethod show]
+	}
+}
+
 snit::widget TCStackView {
 	option -stackvar ""
 	option -statusvar ""
@@ -589,6 +673,9 @@ snit::widget TCStackView {
 		grid [label $win.p.dv.bl -text Bin] -column 0 -row 4 -sticky e
 		grid [entry $win.p.dv.b -state readonly] -column 1 -row 4 -sticky we
 		grid [BitView $win.p.dv.bv] -column 1 -row 5 -sticky w
+
+		#grid [TCNumberView $win.p.dv.nv ] -column 0 -row 6 -columnspan 2 -sticky we
+
 		$win.p add $win.p.dv -sticky new
 
 		pack $win.p -fill both -expand yes
