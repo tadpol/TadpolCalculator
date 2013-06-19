@@ -31,9 +31,8 @@ namespace eval TCFive {
 	# to speed lookups.
 	# ??? mask out {in ni} ops?
 	variable mathops [string map {::tcl::mathop:: ""} [info commands ::tcl::mathop::*]]
-	variable mathfuncs [info functions] 
-
-	# What we consider a number.
+	variable mathfuncs [info functions]
+	variable commentRex {^".*$} ;# "
 	variable hexyNumberRex {^(0(x[[:xdigit:]]+|o[0-7]+|b[01]+))$}
 	variable floatyNumberRex {(?x)^(
 		# floats and ints
@@ -44,6 +43,7 @@ namespace eval TCFive {
 	variable builtins {drop dup swap rot}
 
 	proc isToken {token} {
+		variable commentRex
 		variable hexyNumberRex
 		variable floatyNumberRex
 		variable mathops
@@ -51,6 +51,9 @@ namespace eval TCFive {
 		variable builtins
 		variable defs
 		# this will get called a lot, so cache what we can.
+
+		# Is it a comment?
+		if {[regexp $commentRex $token]} {return YES}
 
 		# is it a number?
 		if {[regexp $hexyNumberRex $token]} {return YES}
@@ -134,14 +137,17 @@ namespace eval TCFive {
 	proc do {token} {
 		variable mathops
 		variable mathfuncs
+		variable commentRex
 		variable hexyNumberRex
 		variable floatyNumberRex
 		variable builtins
 		variable numberModes
 		variable mode
 		variable defs
-		# is it a number?
-		if {[regexp $hexyNumberRex $token]} {
+		
+		if {[regexp $commentRex $token]} {
+			# nothing to do, just eatit
+		} elseif {[regexp $hexyNumberRex $token]} {
 			# bounce thru expr to translate the 0[xbo] into a number
 			push [expr {$token}]
 		} elseif {[regexp $floatyNumberRex $token]} {
