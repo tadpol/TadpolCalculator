@@ -661,7 +661,6 @@ snit::widget TCStackView {
 			-selectmode single \
 			-selecttype row \
 			-stretch all
-		# TODO hilite top row
 		label $win.p.s.m -text "[subst $$options(-statusvar)] $options(-numberbase)"
 		pack $win.p.s.l -fill both -expand yes
 		pack $win.p.s.m -side bottom -fill x
