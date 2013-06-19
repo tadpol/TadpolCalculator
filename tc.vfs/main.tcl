@@ -742,7 +742,7 @@ snit::widget TCHistoryView {
 
 		tablelist::tablelist $win.hist \
 			-activestyle none \
-			-columns {6 idx left 0 command left 15 result right} \
+			-columns {6 idx left 0 command left 20 result right} \
 			-height 10 \
 			-listvariable $options(-historyvar) \
 			-showlabels no \
