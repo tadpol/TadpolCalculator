@@ -159,11 +159,13 @@ namespace eval TCFive {
 				push $token
 			}
 		} elseif {$token in $mathops} {
-			set a [pop]
-			if {$token ni {~ !}} {
-				lappend a [pop]
+			if {$token in {~ !}} {
+				push [::tcl::mathop::$token [pop]]
+			} else {
+				set a [pop]
+				set b [pop]
+				push [::tcl::mathop::$token $b $a]
 			}
-			push [::tcl::mathop::$token {*}$a]
 		} elseif {$token in $builtins} {
 			$token
 		} elseif {$token in $numberModes} {
@@ -177,11 +179,13 @@ namespace eval TCFive {
 			# callout to defines
 			dolist [dict get $defs $token]
 		} elseif {$token in $mathfuncs} {
-			set a [pop]
 			if {$token in {atan2 fmod hypot pow}} {
-				lappend a [pop]
+				set a [pop]
+				set b [pop]
+				push [::tcl::mathop::$token $b $a]
+			} else {
+				push [::tcl::mathfunc::$token [pop]]
 			}
-			push [::tcl::mathfunc::$token {*}$a]
 		}
 	}
 
