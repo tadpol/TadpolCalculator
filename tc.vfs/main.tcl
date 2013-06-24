@@ -565,7 +565,7 @@ snit::widget TCVariablesView {
 snit::widget TCNumberView {
 	option -mode -default Actual -validatemethod validateMode -type snit::stringtype
 	option -textvariable -default "" -configuremethod setTextVariable -type snit::stringtype
-	option -labelwidth -default 9 -type {snit::integer -min 0}
+	option -labelwidth -default 60 -type {snit::integer -min 0}
 
 	typevariable modeList {Actual Decimal Hex Octal Binary IEEE-Hex}
 	variable internalvalue 0
@@ -573,15 +573,28 @@ snit::widget TCNumberView {
 	constructor {args} {
 		$self configurelist $args
 
-		label $win.l -text Actual -width $options(-labelwidth)
+		label $win.l -text Actual
 		entry $win.v -state readonly
-		pack $win.l -side left -fill x -expand no
-		pack $win.v -side right -fill x -expand yes
+		grid $win.l -column 0 -row 0 -sticky e
+		grid $win.v -column 1 -row 0 -sticky ew
+		grid columnconfigure $win 1 -weight 1
+		grid columnconfigure $win 0 -minsize $options(-labelwidth)
+
+		menu $win.popup -tearoff no
+		foreach mode $modeList {
+			$win.popup add command -label $mode -command [mymethod switchMode $mode]
+		}
+		bind $win.l <Button-1> "tk_popup $win.popup %X %Y"
 
 		after idle [mymethod show]
 	}
 	destructor {
 		trace remove variable $options(-textvariable) write [mymethod tvChanged]
+	}
+
+	method switchMode {newmode} {
+		catch {set options(-mode) $newmode}
+		after idle [mymethod show]
 	}
 
 	method show {} {
@@ -602,7 +615,7 @@ snit::widget TCNumberView {
 				set v [::TCFive::convert::fmt $internalvalue bin]
 			}
 			IEEE-Hex {
-				if {![catch {::TCFive::convert::float2IEEE $internalvalue} v]} {
+				if {[catch {::TCFive::convert::float2IEEE $internalvalue} v]} {
 					set v " --error-- "
 				}
 			}
@@ -612,6 +625,8 @@ snit::widget TCNumberView {
 		$win.v delete 0 end
 		$win.v insert end $v
 		$win.v configure -state readonly
+
+		$win.l configure -text $options(-mode)
 	}
 
 	method validateMode {option value} {
@@ -672,19 +687,12 @@ snit::widget TCStackView {
 		$win.p add $win.p.s -sticky news
 
 		frame $win.p.dv
-		grid [label $win.p.dv.al -text Actual] -column 0 -row 0 -sticky e
-		grid [entry $win.p.dv.a -state readonly] -column 1 -row 0 -sticky we
-		grid [label $win.p.dv.dl -text Decimal] -column 0 -row 1 -sticky e
-		grid [entry $win.p.dv.d -state readonly] -column 1 -row 1 -sticky we
-		grid [label $win.p.dv.hl -text Hex] -column 0 -row 2 -sticky e
-		grid [entry $win.p.dv.h -state readonly] -column 1 -row 2 -sticky we
-		grid [label $win.p.dv.ol -text Oct] -column 0 -row 3 -sticky e
-		grid [entry $win.p.dv.o -state readonly] -column 1 -row 3 -sticky we
-		grid [label $win.p.dv.bl -text Bin] -column 0 -row 4 -sticky e
-		grid [entry $win.p.dv.b -state readonly] -column 1 -row 4 -sticky we
-		grid [BitView $win.p.dv.bv] -column 1 -row 5 -sticky w
-
-		grid [TCNumberView $win.p.dv.nv -textvariable [myvar top]] -column 0 -row 6 -columnspan 2 -sticky we
+		pack [TCNumberView $win.p.dv.a -mode Actual -textvariable [myvar top]] -fill x -expand yes
+		pack [TCNumberView $win.p.dv.b -mode Decimal -textvariable [myvar top]] -fill x -expand yes
+		pack [TCNumberView $win.p.dv.c -mode Hex -textvariable [myvar top]] -fill x -expand yes
+		pack [TCNumberView $win.p.dv.d -mode Octal -textvariable [myvar top]] -fill x -expand yes
+		pack [TCNumberView $win.p.dv.e -mode Binary -textvariable [myvar top]] -fill x -expand yes
+		pack [BitView $win.p.dv.bv] -fill x -expand no -padx {50 0}
 
 		$win.p add $win.p.dv -sticky new
 
@@ -709,31 +717,6 @@ snit::widget TCStackView {
 		set tn [lindex $stack 0]
 		if {$tn eq ""} return
 		set top $tn
-
-		$win.p.dv.a configure -state normal
-		$win.p.dv.a delete 0 end
-		$win.p.dv.a insert end $tn
-		$win.p.dv.a configure -state readonly
-
-		$win.p.dv.d configure -state normal
-		$win.p.dv.d delete 0 end
-		$win.p.dv.d insert end [::TCFive::convert::fmt $tn dec]
-		$win.p.dv.d configure -state readonly
-
-		$win.p.dv.h configure -state normal
-		$win.p.dv.h delete 0 end
-		$win.p.dv.h insert end [::TCFive::convert::fmt $tn hex]
-		$win.p.dv.h configure -state readonly
-
-		$win.p.dv.o configure -state normal
-		$win.p.dv.o delete 0 end
-		$win.p.dv.o insert end [::TCFive::convert::fmt $tn oct]
-		$win.p.dv.o configure -state readonly
-
-		$win.p.dv.b configure -state normal
-		$win.p.dv.b delete 0 end
-		$win.p.dv.b insert end [::TCFive::convert::fmt $tn bin]
-		$win.p.dv.b configure -state readonly
 
 		$win.p.dv.bv configure -value [::TCFive::convert::sci2int $tn]
 	}
