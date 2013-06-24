@@ -149,7 +149,7 @@ snit::widget BitView {
 			upvar \#0 $options(-textvariable) TheVariable
 			trace remove variable TheVariable write [mymethod tvChanged]
 		}
-		if {$options(-textvariable) ne ""} {
+		if {$value ne ""} {
 			set options(-textvariable) $value
 			upvar \#0 $options(-textvariable) TheVariable
 			if {![info exists TheVariable]} {set TheVariable 0}

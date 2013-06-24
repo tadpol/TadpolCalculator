@@ -565,7 +565,7 @@ snit::widget TCVariablesView {
 snit::widget TCNumberView {
 	option -mode -default Actual -validatemethod validateMode -type snit::stringtype
 	option -textvariable -default "" -configuremethod setTextVariable -type snit::stringtype
-	option -labelwidth 0
+	option -labelwidth -default 9 -type {snit::integer -min 0}
 
 	typevariable modeList {Actual Decimal Hex Octal Binary IEEE-Hex}
 	variable internalvalue 0
@@ -633,11 +633,11 @@ snit::widget TCNumberView {
 			upvar \#0 $options(-textvariable) TheVariable
 			trace remove variable TheVariable write [mymethod tvChanged]
 		}
-		set internalvalue $value
-		if {$options(-textvariable) ne ""} {
+		if {$value ne ""} {
 			set options(-textvariable) $value
 			upvar \#0 $options(-textvariable) TheVariable
 			if {![info exists TheVariable]} {set TheVariable 0}
+			set internalvalue $TheVariable
 			trace add variable TheVariable write [mymethod tvChanged]
 		}
 		after idle [mymethod show]
@@ -649,7 +649,8 @@ snit::widget TCStackView {
 	option -statusvar ""
 	option -numberbase dec
 
-	variable stack {}
+	variable top 0
+	variable stack {0}
 
 	constructor {args} {
 		$self configurelist $args
@@ -683,7 +684,7 @@ snit::widget TCStackView {
 		grid [entry $win.p.dv.b -state readonly] -column 1 -row 4 -sticky we
 		grid [BitView $win.p.dv.bv] -column 1 -row 5 -sticky w
 
-		#grid [TCNumberView $win.p.dv.nv ] -column 0 -row 6 -columnspan 2 -sticky we
+		grid [TCNumberView $win.p.dv.nv -textvariable [myvar top]] -column 0 -row 6 -columnspan 2 -sticky we
 
 		$win.p add $win.p.dv -sticky new
 
@@ -707,6 +708,8 @@ snit::widget TCStackView {
 	method updateInfo {} {
 		set tn [lindex $stack 0]
 		if {$tn eq ""} return
+		set top $tn
+
 		$win.p.dv.a configure -state normal
 		$win.p.dv.a delete 0 end
 		$win.p.dv.a insert end $tn
