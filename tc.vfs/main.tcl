@@ -718,6 +718,7 @@ snit::widget TCStackView {
 		if {$tn eq ""} return
 		set top $tn
 
+		# FIXME Make sure value works for BitView.
 		$win.p.dv.bv configure -value [::TCFive::convert::sci2int $tn]
 	}
 
@@ -735,7 +736,7 @@ snit::widget TCHistoryView {
 	constructor {args} {
 		$self configurelist $args
 
-		tablelist::tablelist $win.hist \
+		tablelist::tablelist $win.l \
 			-activestyle none \
 			-columns {6 idx left 0 command left 20 result right} \
 			-height 10 \
@@ -745,10 +746,10 @@ snit::widget TCHistoryView {
 			-selecttype row \
 			-stretch {1} \
 			-yscrollcommand [list $win.y set]
-		$win.hist columnconfigure 0 -formatcommand [mymethod indexFormater]
-		$win.hist columnconfigure 0 -showlinenumbers YES
-		scrollbar $win.y -orient vert -command [list $win.hist yview]
-		grid $win.hist -column 0 -row 0 -sticky news
+		$win.l columnconfigure 0 -formatcommand [mymethod indexFormater]
+		$win.l columnconfigure 0 -showlinenumbers YES
+		scrollbar $win.y -orient vert -command [list $win.l yview]
+		grid $win.l -column 0 -row 0 -sticky news
 		grid $win.y -column 1 -row 0 -sticky nes
 		grid columnconfigure $win 0 -weight 1
 		grid rowconfigure $win 0 -weight 1
@@ -759,6 +760,7 @@ snit::widget TCHistoryView {
 	method indexFormater {value} {
 		return h[expr {$value - 1}]
 	}
+
 }
 
 snit::widget TCWorksheet {
@@ -785,7 +787,7 @@ snit::widget TCWorksheet {
 
 		TCStackView $win.p.sv -stackvar ::TCFive::stack -statusvar ::TCFive::mode
 
-		TCHistoryView $win.p.th -historyvar ::TCFive::History::hist
+		TCHistoryView $win.p.hist -historyvar ::TCFive::History::hist
 
 		text $win.p.cmd -height 3 \
 			-borderwidth 0 \
@@ -813,7 +815,7 @@ snit::widget TCWorksheet {
 		$win.p.cmd mark gravity tokenstart left
 
 		$win.p add $win.p.sv -sticky news
-		$win.p add $win.p.th -sticky news
+		$win.p add $win.p.hist -sticky news
 		$win.p add $win.p.cmd -sticky news
 		pack $win.p -fill both -expand yes
 
