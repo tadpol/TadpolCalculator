@@ -233,12 +233,11 @@ namespace eval TCFive {
 			incr end
 		}
 
-		proc condense {{to 1}} {
+		proc remove {hidx} {
 			variable hist
 			variable end
-			set end $to
-			incr to -1
-			set hist [lrange $hist end-$to end]
+			set hist [lrange $hist $hidx $hidx]
+			incr end -1
 		}
 
 		proc validIndex {hidx} {
@@ -805,6 +804,7 @@ snit::widget TCWorksheet {
 		bind $win.p.cmd <Key-Escape> "[mymethod onEsckey]; break"
 		bind $win.p.cmd <Key-BackSpace> [mymethod onBackspace]
 		bind $win.p.cmd <Control-Key-h> [mymethod onBackspace]
+		bind $win.p.cmd <Control-c> "[mymethod doCopy]; break"
 
 		bind $win.p.cmd <Alt-d> "::TCFive::do drop; after idle [mymethod save]; break"
 		bind $win.p.cmd <Alt-D> "::TCFive::do dup; after idle [mymethod save]; break"
@@ -909,6 +909,15 @@ snit::widget TCWorksheet {
 			set x [expr [winfo rootx $win.p.cmd] + [lindex $bb 0]]
 			set y [expr [winfo rooty $win.p.cmd] + [lindex $bb 1] + [lindex $bb 3]]
 			tk_popup $m $x $y
+		}
+	}
+
+	method doCopy {} {
+		if {[$win.p.cmd tag nextrange sel 1.0] eq ""} {
+			clipboard clear
+			clipboard append -- [::TCFive::peek]
+		} else {
+			tk_textCopy $win.p.cmd
 		}
 	}
 
