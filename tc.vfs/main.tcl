@@ -28,6 +28,10 @@ namespace eval TCFive {
 		lappend numberModes sint$p
 	}
 
+	proc ::tcl::mathfunc::1/ {n} {
+		return [::tcl::mathop::/ $n]
+	}
+
 	# to speed lookups.
 	# ??? mask out {in ni} ops?
 	variable mathops [string map {::tcl::mathop:: ""} [info commands ::tcl::mathop::*]]
