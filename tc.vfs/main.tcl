@@ -281,86 +281,47 @@ namespace eval TCFive {
 	}
 
 	namespace eval convert {
-		proc IEEE2float {data {byteorder 0}} {
-			# From http://wiki.tcl.tk/756
-			# reballance as 8 hex nibbles.
-			set data [format "%08X" $data]
-			if {$byteorder == 0} {
-				lassign [regsub -all {(..)} $data "0x\\1 "] se1 e2f1 f2 f3
+
+		proc IEEE2float {val {byteorder big}} {
+			if {$byteorder eq "big"} {
+				set byteorder R
 			} else {
-				lassign [regsub -all {(..)} $data "0x\\1 "] f3 f2 e2f1 se1
+				set byteorder r
 			}
-
-			set se1  [expr {($se1 + 0x100) % 0x100}]
-			set e2f1 [expr {($e2f1 + 0x100) % 0x100}]
-			set f2   [expr {($f2 + 0x100) % 0x100}]
-			set f3   [expr {($f3 + 0x100) % 0x100}]
-
-			set sign [expr {$se1 >> 7}]
-			set exponent [expr {(($se1 & 0x7f) << 1 | ($e2f1 >> 7))}]
-			set f1 [expr {$e2f1 & 0x7f}]
-
-			set fraction [expr {double($f1)*0.0078125 + \
-				double($f2)*3.0517578125e-05 + \
-				double($f3)*1.19209289550781e-07}]
-
-			set res [expr {($sign ? -1. : 1.) * \
-				pow(2.,double($exponent-127)) * \
-				(1. + $fraction)}]
-			return $res
+			set val [expr {$val & 0xffffffff}]
+			binary scan [binary format n $val] $byteorder fm
+			return $fm
 		}
 
-		proc float2IEEE {val {byteorder 0}} {
-			# From http://wiki.tcl.tk/756
-			if {$val > 0} {
-				set sign 0
+		proc float2IEEE {val {byteorder big}} {
+			if {$byteorder eq "big"} {
+				set byteorder R
 			} else {
-				set sign 1
-				set val [expr {-1. * $val}]
+				set byteorder r
 			}
-
-			# If the following math fails, then it's because of the logarithm.
-			# That means that val is indistinguishable from zero.
-			if {[catch {
-				set exponent [expr {int(floor(log($val)/0.69314718055994529))+127}]
-				set fraction [expr {($val/pow(2.,double($exponent-127)))-1.}]
-			}]} {
-				set exponent 0
-				set fraction 0.0
-			} else {
-				# round off too-small values to zero, throw error for
-				# too-large values
-				if {$exponent < 0} {
-					set exponent 0
-					set fraction 0.0
-				} elseif {$exponent > 255} {
-					error "value $val outside legal range for a float"
-				}
-			}
-
-			set fraction [expr {$fraction * 128.}]
-			set f1f      [expr {floor($fraction)}]
-			set fraction [expr {($fraction - $f1f) * 256.}]
-			set f2f      [expr {floor($fraction)}]
-			set fraction [expr {($fraction - $f2f) * 256.}]
-			set f3f      [expr {floor($fraction)}]
-
-			set f1       [expr {int($f1f)}]
-			set f2       [expr {int($f2f)}]
-			set f3       [expr {int($f3f)}]
-
-			set se1      [expr {($sign ? 128 : 0) | ($exponent >> 1)}]
-			set e2f1     [expr {(($exponent & 0x1) << 7) | $f1}]
-
-			if {$byteorder == 0} {
-				set bytes [format "%02x%02x%02x%02x" $se1 $e2f1 $f2 $f3]
-			} else {
-				set bytes [format "%02x%02x%02x%02x" $f3 $f2 $e2f1 $se1]
-			}
-			return $bytes
+			binary scan [binary format $byteorder $val] n fm
+			return [format %08x $fm]
 		}
 
-		# TODO Need double versions of the float-IEEE functions above
+		proc IEEE2double {val {byteorder big}} {
+			if {$byteorder eq "big"} {
+				set byteorder Q
+			} else {
+				set byteorder q
+			}
+			set val [expr {wide($val)}]
+			binary scan [binary format m $val] $byteorder fm
+			return $fm
+		}
+		proc double2IEEE {val {byteorder big}} {
+			if {$byteorder eq "big"} {
+				set byteorder Q
+			} else {
+				set byteorder q
+			}
+			binary scan [binary format $byteorder $val] m fm
+			return [format %016x $fm]
+		}
 
 		proc hex2bin {num} {
 			if {[string range $num 0 1] eq "0x"} {
