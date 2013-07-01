@@ -466,6 +466,7 @@ namespace eval TCFive {
 
 			set di [expr $pow - $p]
 			set number [expr pow(10,$di) * $sign$num$frac]
+			set number [format %.${percision}f $number]
 
 			return "$number$l"
 		}
@@ -534,7 +535,7 @@ snit::widget TCNumberView {
 	option -textvariable -default "" -configuremethod setTextVariable -type snit::stringtype
 	option -labelwidth -default 60 -type {snit::integer -min 0}
 
-	typevariable modeList {Actual Decimal Hex Octal Binary IEEE32 IEEE64}
+	typevariable modeList {Actual Decimal Hex Octal Binary Labeled IEEE32 IEEE64}
 	variable internalvalue 0
 
 	constructor {args} {
@@ -580,6 +581,9 @@ snit::widget TCNumberView {
 			}
 			Binary {
 				set v [::TCFive::convert::fmt $internalvalue bin]
+			}
+			Labeled {
+				set v [::TCFive::convert::best $internalvalue]
 			}
 			IEEE32 {
 				set v [::TCFive::convert::float2IEEE $internalvalue]
