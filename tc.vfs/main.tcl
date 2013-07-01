@@ -534,7 +534,7 @@ snit::widget TCNumberView {
 	option -textvariable -default "" -configuremethod setTextVariable -type snit::stringtype
 	option -labelwidth -default 60 -type {snit::integer -min 0}
 
-	typevariable modeList {Actual Decimal Hex Octal Binary IEEE-Hex}
+	typevariable modeList {Actual Decimal Hex Octal Binary IEEE32 IEEE64}
 	variable internalvalue 0
 
 	constructor {args} {
@@ -581,10 +581,11 @@ snit::widget TCNumberView {
 			Binary {
 				set v [::TCFive::convert::fmt $internalvalue bin]
 			}
-			IEEE-Hex {
-				if {[catch {::TCFive::convert::float2IEEE $internalvalue} v]} {
-					set v " --error-- "
-				}
+			IEEE32 {
+				set v [::TCFive::convert::float2IEEE $internalvalue]
+			}
+			IEEE64 {
+				set v [::TCFive::convert::double2IEEE $internalvalue]
 			}
 		}
 
