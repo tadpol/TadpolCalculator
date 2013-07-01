@@ -14,7 +14,7 @@ snit::widget BitView {
 	option -bitlabelcolor -default gray64 -type snit::stringtype
 
 	option -edit -default no -type snit::boolean
-	option -value -default 0 -configuremethod copyValueIn -type snit::integer
+	option -value -default 0 -configuremethod copyValueIn
 	option -textvariable -default "" -configuremethod setTextVariable -type snit::stringtype
 
 	constructor {args} {
@@ -67,7 +67,11 @@ snit::widget BitView {
 	}
 
 	method drawBits {} {
-		set bv $options(-value)
+		if {[regexp {^\d+$} $options(-value)]} {
+			set bv [expr {entier($options(-value))}]
+		} else {
+			set bv 0
+		}
 		for {set b 0} {$b < $options(-bits)} {incr b} {
 			$win.c create text [$self coordsForBit $b] -anchor nw \
 				-text [expr {($bv >> $b) & 1}] \
