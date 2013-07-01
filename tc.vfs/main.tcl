@@ -31,6 +31,9 @@ namespace eval TCFive {
 	proc ::tcl::mathfunc::1/ {n} {
 		return [::tcl::mathop::/ $n]
 	}
+	proc ::tcl::mathfunc::0- {n} {
+		return [::tcl::mathop::- $n]
+	}
 
 	# to speed lookups.
 	# ??? mask out {in ni} ops?
