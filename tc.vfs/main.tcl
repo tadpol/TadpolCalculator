@@ -634,7 +634,6 @@ snit::widget TCNumberView {
 snit::widget TCStackView {
 	option -stackvar ""
 	option -statusvar ""
-	option -numberbase dec
 
 	variable top 0
 	variable stack {0}
@@ -653,7 +652,7 @@ snit::widget TCStackView {
 			-selectmode single \
 			-selecttype row \
 			-stretch all
-		label $win.p.s.m -text "[subst $$options(-statusvar)] $options(-numberbase)"
+		label $win.p.s.m -text [subst $$options(-statusvar)]
 		pack $win.p.s.l -fill both -expand yes
 		pack $win.p.s.m -side bottom -fill x
 		$win.p add $win.p.s -sticky news
@@ -682,7 +681,7 @@ snit::widget TCStackView {
 
 	method updateStatus {name1 name2 op} {
 		upvar $name1 status
-		$win.p.s.m configure -text "$status $options(-numberbase)"
+		$win.p.s.m configure -text $status 
 	}
 
 	method updateInfo {} {
@@ -725,8 +724,14 @@ snit::widget TCHistoryView {
 		grid $win.y -column 1 -row 0 -sticky nes
 		grid columnconfigure $win 0 -weight 1
 		grid rowconfigure $win 0 -weight 1
+
+		trace add variable $options(-historyvar) write [mymethod updateHist]
 	}
 	destructor {
+	}
+
+	method updateHist {name1 name2 op} {
+		after idle $win.l see end
 	}
 
 	method indexFormater {value} {
@@ -832,7 +837,6 @@ snit::widget TCWorksheet {
 
 		# Check if it is valid.
 		if {![::TCFive::isToken $token]} {
-			# If no, errors how?
 			$win.p.cmd tag add notAToken tokenstart "tokenstart lineend"
 		} else {
 			$win.p.cmd insert end " "
